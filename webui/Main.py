@@ -75,6 +75,10 @@ if "match_materials_to_script" not in st.session_state:
     st.session_state["match_materials_to_script"] = bool(
         config.app.get("match_materials_to_script", False)
     )
+if "terms_per_sentence" not in st.session_state:
+    st.session_state["terms_per_sentence"] = bool(
+        config.app.get("terms_per_sentence", False)
+    )
 if "ui_language" not in st.session_state:
     st.session_state["ui_language"] = config.ui.get("language", system_locale)
 if "local_video_materials" not in st.session_state:
@@ -767,6 +771,13 @@ with left_panel:
             else:
                 params.custom_system_prompt = ""
 
+            params.terms_per_sentence = st.checkbox(
+                tr("Terms Per Sentence"),
+                help=tr("Terms Per Sentence Help"),
+                key="terms_per_sentence",
+            )
+            config.app["terms_per_sentence"] = params.terms_per_sentence
+
         if st.button(
             tr("Generate Video Script and Keywords"), key="auto_generate_script"
         ):
@@ -778,15 +789,18 @@ with left_panel:
                     video_script_prompt=params.video_script_prompt,
                     custom_system_prompt=params.custom_system_prompt,
                 )
-                terms = llm.generate_terms(
-                    params.video_subject,
-                    script,
-                    amount=8 if params.match_materials_to_script else 5,
-                    match_script_order=params.match_materials_to_script,
-                )
+                if params.terms_per_sentence:
+                    terms = llm.generate_terms_per_sentence(params.video_subject, script)
+                else:
+                    terms = llm.generate_terms(
+                        params.video_subject,
+                        script,
+                        amount=8 if params.match_materials_to_script else 5,
+                        match_script_order=params.match_materials_to_script,
+                    )
                 if "Error: " in script:
                     st.error(tr(script))
-                elif "Error: " in terms:
+                elif isinstance(terms, str) and "Error: " in terms:
                     st.error(tr(terms))
                 else:
                     st.session_state["video_script"] = script
@@ -800,13 +814,18 @@ with left_panel:
                 st.stop()
 
             with st.spinner(tr("Generating Video Keywords")):
-                terms = llm.generate_terms(
-                    params.video_subject,
-                    params.video_script,
-                    amount=8 if params.match_materials_to_script else 5,
-                    match_script_order=params.match_materials_to_script,
-                )
-                if "Error: " in terms:
+                if params.terms_per_sentence:
+                    terms = llm.generate_terms_per_sentence(
+                        params.video_subject, params.video_script
+                    )
+                else:
+                    terms = llm.generate_terms(
+                        params.video_subject,
+                        params.video_script,
+                        amount=8 if params.match_materials_to_script else 5,
+                        match_script_order=params.match_materials_to_script,
+                    )
+                if isinstance(terms, str) and "Error: " in terms:
                     st.error(tr(terms))
                 else:
                     st.session_state["video_terms"] = ", ".join(terms)
@@ -827,14 +846,18 @@ with middle_panel:
             (tr("Pixabay"), "pixabay"),
             (tr("Coverr"), "coverr"),
             (tr("Local file"), "local"),
+            (tr("Reuse Downloaded Videos"), "local_cache"),
             (tr("TikTok"), "douyin"),
             (tr("Bilibili"), "bilibili"),
             (tr("Xiaohongshu"), "xiaohongshu"),
         ]
 
         saved_video_source_name = config.app.get("video_source", "pexels")
-        saved_video_source_index = [v[1] for v in video_sources].index(
-            saved_video_source_name
+        _source_ids = [v[1] for v in video_sources]
+        saved_video_source_index = (
+            _source_ids.index(saved_video_source_name)
+            if saved_video_source_name in _source_ids
+            else 0
         )
 
         selected_index = st.selectbox(
@@ -854,6 +877,13 @@ with middle_panel:
                 type=local_file_types + [file_type.upper() for file_type in local_file_types],
                 accept_multiple_files=True,
             )
+        elif params.video_source == "local_cache":
+            cache_dir = utils.storage_dir("cache_videos")
+            cache_videos = [
+                f for f in os.listdir(cache_dir)
+                if f.lower().endswith((".mp4", ".mov", ".avi", ".flv", ".mkv"))
+            ] if os.path.exists(cache_dir) else []
+            st.info(tr("Reuse Downloaded Videos Info").format(count=len(cache_videos), path=cache_dir))
 
         selected_index = st.selectbox(
             tr("Video Concat Mode"),
@@ -1463,7 +1493,7 @@ if start_button:
         scroll_to_bottom()
         st.stop()
 
-    if params.video_source not in ["pexels", "pixabay", "coverr", "local"]:
+    if params.video_source not in ["pexels", "pixabay", "coverr", "local", "local_cache"]:
         st.error(tr("Please Select a Valid Video Source"))
         scroll_to_bottom()
         st.stop()

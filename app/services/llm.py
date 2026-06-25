@@ -851,6 +851,72 @@ Please note that you must use English for generating video search terms; Chinese
     return search_terms
 
 
+def generate_terms_per_sentence(
+    video_subject: str,
+    video_script: str,
+) -> List[str]:
+    """Generate one search term per sentence in the script for tighter visual matching."""
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?。！？])\s*", video_script) if s.strip()]
+    if not sentences:
+        return []
+
+    numbered = "\n".join(f"{i+1}. {s}" for i, s in enumerate(sentences))
+    prompt = f"""# Role: Video Footage Search Term Generator
+
+## Goal:
+For each numbered sentence below, generate exactly one short English search term (1-3 words) that best describes the visual scene or imagery of that sentence. The term will be used to search for stock video footage.
+
+## Rules:
+1. Return a JSON array of strings with exactly {len(sentences)} items, one per sentence.
+2. Each term must be 1-3 words in English only.
+3. The term must match the specific visual content of that sentence, not the overall topic.
+4. Return only the JSON array, nothing else.
+
+## Output Example (for {len(sentences)} sentences):
+{json.dumps([f"visual term {i+1}" for i in range(len(sentences))], ensure_ascii=False)}
+
+## Script Subject:
+{video_subject}
+
+## Numbered Sentences:
+{numbered}
+""".strip()
+
+    logger.info(f"generating per-sentence terms for {len(sentences)} sentences")
+
+    search_terms = []
+    response = ""
+    for i in range(_max_retries):
+        try:
+            response = _generate_response(prompt)
+            if "Error: " in response:
+                logger.error(f"failed to generate per-sentence terms: {response}")
+                return []
+            search_terms = json.loads(_strip_code_fence(response))
+            if (
+                isinstance(search_terms, list)
+                and all(isinstance(t, str) for t in search_terms)
+                and len(search_terms) == len(sentences)
+            ):
+                break
+            logger.warning(f"unexpected response length or type, retrying... {i+1}")
+            search_terms = []
+        except Exception as e:
+            logger.warning(f"failed to parse per-sentence terms: {e}")
+            if response:
+                match = re.search(r"\[.*]", response, re.DOTALL)
+                if match:
+                    try:
+                        search_terms = json.loads(match.group())
+                        if isinstance(search_terms, list) and all(isinstance(t, str) for t in search_terms):
+                            break
+                    except Exception:
+                        pass
+
+    logger.success(f"per-sentence terms ({len(search_terms)}): {search_terms}")
+    return search_terms
+
+
 # =============================================================================
 # Social publishing metadata
 #

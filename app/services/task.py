@@ -1,4 +1,5 @@
 import math
+import os
 import os.path
 import re
 from os import path
@@ -39,15 +40,21 @@ def generate_terms(task_id, params, video_script):
     logger.info("\n\n## generating video terms")
     video_terms = params.video_terms
     if not video_terms:
-        # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
-        # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
-        # 无法改善“后面内容的画面提前出现”的问题。
-        video_terms = llm.generate_terms(
-            video_subject=params.video_subject,
-            video_script=video_script,
-            amount=8 if params.match_materials_to_script else 5,
-            match_script_order=params.match_materials_to_script,
-        )
+        if params.terms_per_sentence:
+            video_terms = llm.generate_terms_per_sentence(
+                video_subject=params.video_subject,
+                video_script=video_script,
+            )
+        else:
+            # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
+            # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
+            # 无法改善”后面内容的画面提前出现”的问题。
+            video_terms = llm.generate_terms(
+                video_subject=params.video_subject,
+                video_script=video_script,
+                amount=8 if params.match_materials_to_script else 5,
+                match_script_order=params.match_materials_to_script,
+            )
     else:
         if isinstance(video_terms, str):
             video_terms = [term.strip() for term in re.split(r"[,，]", video_terms)]
@@ -228,6 +235,25 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return [material_info.url for material_info in materials]
+    elif params.video_source == "local_cache":
+        logger.info("\n\n## reusing videos from cache_videos directory")
+        cache_dir = utils.storage_dir("cache_videos")
+        if not os.path.exists(cache_dir):
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error(f"cache_videos directory not found: {cache_dir}")
+            return None
+        video_extensions = {".mp4", ".mov", ".avi", ".flv", ".mkv"}
+        cached_files = [
+            os.path.join(cache_dir, f)
+            for f in os.listdir(cache_dir)
+            if os.path.splitext(f)[1].lower() in video_extensions
+        ]
+        if not cached_files:
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error(f"no video files found in cache directory: {cache_dir}")
+            return None
+        logger.info(f"found {len(cached_files)} cached videos in {cache_dir}")
+        return cached_files
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
         # 顺序匹配模式只在用户显式开启时生效。这里强制素材下载按关键词顺序
@@ -253,6 +279,40 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return downloaded_videos
+
+
+def _save_social_metadata(task_id: str, params, video_script: str) -> None:
+    logger.info("\n\n## generating social metadata file")
+    platforms = list(llm.SOCIAL_PLATFORMS.keys())
+    sections = []
+    for platform in platforms:
+        label = llm.SOCIAL_PLATFORM_LABELS.get(platform, platform)
+        try:
+            meta = llm.generate_social_metadata(
+                video_subject=params.video_subject,
+                video_script=video_script,
+                language=params.video_language or "",
+                platform=platform,
+            )
+            hashtags_str = " ".join(meta.get("hashtags", []))
+            sections.append(
+                f"## {label}\n\n"
+                f"**Title**\n{meta.get('title', '')}\n\n"
+                f"**Caption**\n{meta.get('caption', '')}\n\n"
+                f"**Hashtags**\n{hashtags_str}\n"
+            )
+        except Exception as e:
+            logger.warning(f"failed to generate metadata for {label}: {e}")
+            sections.append(f"## {label}\n\n_(generation failed)_\n")
+
+    content = (
+        f"# Social Metadata — {params.video_subject}\n\n"
+        + "\n---\n\n".join(sections)
+    )
+    output_path = path.join(utils.task_dir(task_id), "social_metadata.md")
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    logger.success(f"social metadata saved: {output_path}")
 
 
 def generate_final_videos(
@@ -452,6 +512,9 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
                 logger.info(f"✅ Cross-posted: {video_path}")
             else:
                 logger.warning(f"⚠️ Failed to cross-post: {video_path} - {result.get('error', 'Unknown error')}")
+
+    # 8. Generate social metadata file
+    _save_social_metadata(task_id, params, video_script)
 
     kwargs = {
         "videos": final_video_paths,
