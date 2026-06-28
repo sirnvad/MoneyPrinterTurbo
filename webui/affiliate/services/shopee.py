@@ -31,11 +31,16 @@ _HEADERS = {
 }
 
 _HOOK_TYPES = [
-    ("curiosity", "Tò mò / Câu hỏi khiến xem tiếp"),
-    ("shock",     "Shock / Bất ngờ / Số liệu ấn tượng"),
-    ("benefit",   "Lợi ích trực tiếp / Giải pháp rõ ràng"),
-    ("story",     "Kể chuyện / Trải nghiệm cá nhân"),
-    ("compare",   "So sánh / Trước-sau"),
+    ("curiosity",   "Tò mò / Câu hỏi khiến xem tiếp"),
+    ("shock",       "Shock / Bất ngờ / Số liệu ấn tượng"),
+    ("benefit",     "Lợi ích trực tiếp / Giải pháp rõ ràng"),
+    ("story",       "Kể chuyện / Trải nghiệm cá nhân"),
+    ("compare",     "So sánh / Trước-sau"),
+    ("problem",     "Nêu thẳng vấn đề nhức nhối"),
+    ("testimonial", "Lời chứng thực / Review người dùng"),
+    ("tips",        "Mẹo / Hướng dẫn nhanh"),
+    ("trend",       "Bắt trend / Xu hướng đang hot"),
+    ("fomo",        "FOMO / Sợ bỏ lỡ / Khan hiếm"),
 ]
 
 
@@ -289,25 +294,30 @@ def _sample_analysis(name: str, script_count: int):
         "use_cases": ["Dùng hằng ngày", "Làm quà tặng"],
         "tone": "Thân thiện, gần gũi",
     }
-    samples = {
-        "curiosity": (f"Vì sao {name} lại được săn lùng đến vậy?",
-                      "Sợ mua nhầm hàng kém"),
-        "shock":     (f"Tôi đã thử {name} và bất ngờ với kết quả!",
-                      "Liệu có thật sự hiệu quả?"),
-        "benefit":   (f"3 lý do {name} đáng mua nhất tầm giá này.",
-                      "Giá cao ở nơi khác"),
+    sample_hooks = {
+        "curiosity":   f"Vì sao {name} lại được săn lùng đến vậy?",
+        "shock":       f"Tôi đã thử {name} và bất ngờ với kết quả!",
+        "benefit":     f"3 lý do {name} đáng mua nhất tầm giá này.",
+        "story":       f"Câu chuyện của tôi với {name}...",
+        "compare":     f"Trước và sau khi dùng {name} khác biệt thế nào?",
+        "problem":     f"Bạn đang gặp vấn đề này? {name} có thể giúp.",
+        "testimonial": f"Hàng nghìn người đã tin dùng {name}.",
+        "tips":        f"Mẹo dùng {name} hiệu quả mà ít ai biết.",
+        "trend":       f"{name} đang gây bão khắp Shopee!",
+        "fomo":        f"Đừng bỏ lỡ {name} — sắp hết hàng!",
     }
-    order = ["curiosity", "shock", "benefit"]
+    order = [ht for ht, _ in _HOOK_TYPES]
     scripts = []
-    for ht in order[:script_count]:
-        hook_text, angle = samples[ht]
+    for i in range(script_count):
+        ht = order[i % len(order)]
+        hook_text = sample_hooks.get(ht, f"Hook {ht} cho {name}")
         scripts.append({
             "hook_type": ht,
-            "angle": angle,
+            "angle": f"Insight mẫu #{i+1}",
             "hook_text": hook_text,
             "script": (f"[{ht}] {hook_text} "
-                       f"Đồng cảm với điểm đau '{angle}'. "
-                       f"Giới thiệu {name} như giải pháp. "
+                       f"Đồng cảm điểm đau khách hàng. "
+                       f"Giới thiệu {name} như giải pháp (USP). "
                        f"Kết: 'Link mua trong bio nhé!'"),
             "video_terms": ["product showcase", "happy customer", "unboxing"],
         })

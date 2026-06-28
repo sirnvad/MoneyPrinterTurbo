@@ -190,6 +190,16 @@ def _generate_response(prompt: str) -> str:
                 base_url = config.app.get("openai_base_url", "")
                 if not base_url:
                     base_url = "https://api.openai.com/v1"
+            elif llm_provider in ("claude", "anthropic"):
+                # Anthropic cung cấp endpoint tương thích OpenAI Chat Completions,
+                # nên dùng lại OpenAI client phía dưới (api.anthropic.com/v1).
+                api_key = config.app.get("claude_api_key")
+                model_name = config.app.get("claude_model_name")
+                base_url = config.app.get("claude_base_url", "")
+                if not base_url:
+                    base_url = "https://api.anthropic.com/v1/"
+                if not model_name:
+                    model_name = "claude-sonnet-4-6"
             elif llm_provider == "aihubmix":
                 api_key = config.app.get("aihubmix_api_key")
                 model_name = config.app.get("aihubmix_model_name")

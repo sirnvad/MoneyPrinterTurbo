@@ -100,6 +100,15 @@ openai_base_url = ""
 # 如果使用兼容供应商，请填写该平台要求的模型 ID。
 openai_model_name = "gpt-4o-mini"
 
+########## Claude (Anthropic) API Key
+# Anthropic cung cấp endpoint tương thích OpenAI Chat Completions.
+# Lấy API key tại https://console.anthropic.com/settings/keys
+claude_api_key = ""
+# Để trống để dùng mặc định https://api.anthropic.com/v1/
+claude_base_url = ""
+# Ví dụ: claude-sonnet-4-6, claude-opus-4-8, claude-haiku-4-5-20251001
+claude_model_name = "claude-sonnet-4-6"
+
 ########## AIHubMix API Key
 # AIHubMix is OpenAI-compatible and can use one API key to access multiple models.
 # Visit https://aihubmix.com/?aff=CEve to register and get your API key.

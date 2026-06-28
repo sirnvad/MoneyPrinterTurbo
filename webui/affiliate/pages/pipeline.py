@@ -59,11 +59,22 @@ _PIPELINE_CSS = """
 .hk-benefit{background:#1a3320;color:#81c784;}
 .hk-story{background:#2d1f44;color:#ce93d8;}
 .hk-compare{background:#3d2800;color:#ffb74d;}
+.hk-problem{background:#3a1a2a;color:#f48fb1;}
+.hk-testimonial{background:#16323a;color:#4dd0e1;}
+.hk-tips{background:#2a3318;color:#c5e1a5;}
+.hk-trend{background:#33291a;color:#ffcc80;}
+.hk-fomo{background:#3a1f1a;color:#ff8a65;}
 .st-draft{background:#2d2b1a;color:#ffd54f;}
 .st-rendering{background:#1a3320;color:#81c784;}
 .st-scheduled{background:#3d2800;color:#ffb74d;}
 .st-posted{background:#1a3a5c;color:#4fc3f7;}
 .st-error{background:#3d1515;color:#ef9a9a;}
+/* Thumbnail placeholder cho video chưa render */
+.aff-thumb{
+  width:100%;aspect-ratio:9/16;max-height:120px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;font-size:28px;
+  background:linear-gradient(135deg,#1e2133,#2a2e44);border:1px solid #2d3142;
+}
 </style>
 """
 
@@ -101,7 +112,8 @@ def _add_product_bar():
             )
         with col_count:
             script_count = st.number_input(
-                "Số kịch bản", min_value=1, max_value=5, value=3, label_visibility="collapsed"
+                "Số video", min_value=5, max_value=10, value=5, label_visibility="collapsed",
+                help="Số video tạo ra cho sản phẩm (5–10)",
             )
         with col_btn:
             submitted = st.form_submit_button("➕ Phân tích & Tạo", use_container_width=True, type="primary")
@@ -141,7 +153,7 @@ def _batch_import():
             )
         with col_count:
             batch_count = st.number_input(
-                "Số kịch bản / sản phẩm", min_value=1, max_value=5, value=3, key="batch_count"
+                "Số video / sản phẩm", min_value=5, max_value=10, value=5, key="batch_count"
             )
 
         st.caption("Dán mỗi link trên một dòng:")
@@ -358,146 +370,218 @@ def _render_analysis(product: dict):
 # ── Campaign grid ─────────────────────────────────────────────────────────────
 
 _HOOK_ICON = {
-    "curiosity": "🤔", "shock": "😱", "benefit": "✅",
-    "story": "📖", "compare": "⚖️",
+    "curiosity": "🤔", "shock": "😱", "benefit": "✅", "story": "📖",
+    "compare": "⚖️", "problem": "❗", "testimonial": "⭐", "tips": "💡",
+    "trend": "🔥", "fomo": "⏰",
 }
 
+# Tất cả trạng thái có thể có của 1 video
+_ALL_STATUSES = ["draft", "rendering", "scheduled", "posted", "error"]
+
+
 def _campaign_grid(product_id: int, campaigns: list[dict], product: dict):
-    cols = st.columns(len(campaigns))
+    """Hiển thị các video dạng danh sách dòng ngang (thumbnail + nội dung + hành động)."""
     pages = store.list_pages()
     page = next((p for p in pages if p["id"] == product.get("page_id")), None)
 
-    for idx, (col, camp) in enumerate(zip(cols, campaigns)):
-        cid = camp["id"]
-        hook_type = camp.get("hook_type", "")
-        icon = _HOOK_ICON.get(hook_type, "🎬")
-        status = camp.get("status", "draft")
-        status_label = _CAMPAIGN_STATUS_LABEL.get(status, status)
+    # Đếm theo trạng thái + chú thích tất cả trạng thái
+    counts = {s: 0 for s in _ALL_STATUSES}
+    for c in campaigns:
+        counts[c.get("status", "draft")] = counts.get(c.get("status", "draft"), 0) + 1
+    legend = " ".join(
+        f"<span class='aff-chip st-{s}'>{_CAMPAIGN_STATUS_LABEL.get(s, s)}: {counts.get(s,0)}</span>"
+        for s in _ALL_STATUSES
+    )
+    st.markdown(
+        f"<div style='margin:4px 0 10px'>📹 <b>{len(campaigns)} video</b> &nbsp; {legend}</div>",
+        unsafe_allow_html=True,
+    )
 
-        with col:
-            st.markdown(
-                f"<span class='aff-chip hk-{hook_type}'>{icon} {hook_type.capitalize()}</span>"
-                f"<span class='aff-chip st-{status}'>{status_label}</span>",
-                unsafe_allow_html=True,
-            )
-            # Hook text (editable)
-            hook = st.text_area(
-                "Hook",
-                value=camp.get("hook_text", ""),
-                height=80,
-                key=f"hook_{cid}",
-                label_visibility="collapsed",
-            )
+    # ── Thanh hành động hàng loạt ──
+    _bulk_action_bar(product_id, campaigns, page)
 
-            # Script preview
-            with st.expander("Xem kịch bản"):
-                script = st.text_area(
-                    "Kịch bản",
-                    value=camp.get("script", ""),
-                    height=200,
-                    key=f"script_{cid}",
-                )
-                if st.button("💾 Lưu kịch bản", key=f"save_script_{cid}"):
-                    store.update_campaign(
-                        cid,
-                        hook_text=st.session_state[f"hook_{cid}"],
-                        script=st.session_state[f"script_{cid}"],
-                    )
-                    st.success("Đã lưu")
+    for camp in campaigns:
+        _campaign_row(camp, product, page)
 
-            # Video actions
-            if status == "draft":
-                if st.button("🎬 Tạo video", key=f"render_{cid}", use_container_width=True, type="primary"):
-                    # Save latest edits first
-                    store.update_campaign(cid, hook_text=hook, script=camp.get("script", ""))
-                    test_mode = store.get_setting("test_mode", "") == "1"
-                    task_id = video_client.start_video_task(cid)
-                    if task_id:
-                        if test_mode:
-                            st.success("🧪 Đã giả lập render xong, sẵn sàng đăng.")
-                        else:
-                            st.success(f"Đang render... task: {task_id}")
-                            # Poll trong thread nền (chỉ với backend thật)
-                            t = threading.Thread(
-                                target=video_client.sync_campaign_video,
-                                args=(cid,), daemon=True,
-                            )
-                            t.start()
-                    else:
-                        st.error("Không thể khởi động task render. Kiểm tra API server.")
-                    st.rerun()
 
-            elif status == "rendering":
-                st.info("⏳ Đang render video...")
-                if camp.get("task_id"):
-                    result = video_client.poll_task(camp["task_id"])
-                    progress = result.get("progress", 0)
-                    st.progress(progress / 100)
+def _bulk_action_bar(product_id: int, campaigns: list[dict], page: dict | None):
+    """Chọn nhiều video + thực hiện hành động hàng loạt."""
+    selected = [c for c in campaigns if st.session_state.get(f"sel_{c['id']}")]
+    n_sel = len(selected)
+    test_mode = store.get_setting("test_mode", "") == "1"
 
-            elif status in ("scheduled", "error"):
-                if camp.get("video_path"):
-                    st.video(camp["video_path"])
+    cols = st.columns([1.2, 1.2, 1.6, 1.4, 1.2])
 
-                test_mode = store.get_setting("test_mode", "") == "1"
-                if status == "scheduled" and (page or test_mode):
-                    # ── Caption đăng bài (tự sinh, cho sửa) ──
-                    current_caption = caption_svc.ensure_caption(cid)
-                    new_caption = st.text_area(
-                        "📝 Caption đăng bài",
-                        value=current_caption,
-                        height=140,
-                        key=f"caption_{cid}",
-                    )
-                    cap_col1, cap_col2 = st.columns(2)
-                    with cap_col1:
-                        if st.button("💾 Lưu caption", key=f"save_cap_{cid}", use_container_width=True):
-                            store.update_campaign(cid, caption=new_caption)
-                            st.success("Đã lưu caption")
-                    with cap_col2:
-                        if st.button("🔄 Tạo lại", key=f"regen_cap_{cid}", use_container_width=True,
-                                     help="Dựng lại caption từ template + link + hashtag"):
-                            product_full = store.get_product(camp["product_id"])
-                            store.update_campaign(
-                                cid, caption=caption_svc.build_caption(camp, product_full or {})
-                            )
-                            st.rerun()
+    # Chọn tất cả / bỏ chọn
+    with cols[0]:
+        if st.button(f"☑ Chọn tất cả", key=f"selall_{product_id}", use_container_width=True):
+            for c in campaigns:
+                st.session_state[f"sel_{c['id']}"] = True
+            st.rerun()
+    with cols[1]:
+        if st.button("☐ Bỏ chọn", key=f"selnone_{product_id}", use_container_width=True):
+            for c in campaigns:
+                st.session_state[f"sel_{c['id']}"] = False
+            st.rerun()
 
-                    post_label = "🧪 Đăng (thử nghiệm)" if test_mode else "📤 Đăng Reels"
-                    if st.button(post_label, key=f"post_{cid}", use_container_width=True, type="primary"):
+    # Tạo video hàng loạt (các mục draft đã chọn)
+    with cols[2]:
+        drafts = [c for c in selected if c.get("status") == "draft"]
+        if st.button(f"🎬 Tạo video ({len(drafts)})", key=f"bulkrender_{product_id}",
+                     use_container_width=True, type="primary", disabled=not drafts):
+            with st.spinner(f"Đang tạo {len(drafts)} video..."):
+                for c in drafts:
+                    tid = video_client.start_video_task(c["id"])
+                    if tid and not test_mode:
+                        threading.Thread(target=video_client.sync_campaign_video,
+                                         args=(c["id"],), daemon=True).start()
+            st.success(f"Đã khởi động {len(drafts)} video")
+            st.rerun()
+
+    # Đăng hàng loạt (các mục scheduled đã chọn)
+    with cols[3]:
+        sched = [c for c in selected if c.get("status") == "scheduled"]
+        post_disabled = not sched or not (page or test_mode)
+        if st.button(f"📤 Đăng ({len(sched)})", key=f"bulkpost_{product_id}",
+                     use_container_width=True, disabled=post_disabled):
+            ok = fail = 0
+            with st.spinner(f"Đang đăng {len(sched)} video..."):
+                for c in sched:
+                    try:
+                        fb_svc.post_campaign(c["id"]); ok += 1
+                    except Exception:
+                        fail += 1
+            st.success(f"Đăng xong: {ok} thành công, {fail} lỗi")
+            st.rerun()
+
+    # Xoá hàng loạt
+    with cols[4]:
+        if st.button(f"🗑 Xoá ({n_sel})", key=f"bulkdel_{product_id}",
+                     use_container_width=True, disabled=not selected):
+            for c in selected:
+                store.delete_campaign(c["id"])
+                st.session_state.pop(f"sel_{c['id']}", None)
+            st.rerun()
+
+    if n_sel:
+        st.caption(f"Đã chọn {n_sel} video.")
+
+
+def _campaign_row(camp: dict, product: dict, page: dict | None):
+    cid = camp["id"]
+    hook_type = camp.get("hook_type", "")
+    icon = _HOOK_ICON.get(hook_type, "🎬")
+    status = camp.get("status", "draft")
+    status_label = _CAMPAIGN_STATUS_LABEL.get(status, status)
+
+    c_sel, c_thumb, c_main, c_act = st.columns([0.4, 1, 4, 2])
+
+    # ── Checkbox chọn ──
+    with c_sel:
+        st.checkbox("Chọn", key=f"sel_{cid}", label_visibility="collapsed")
+
+    # ── Thumbnail ──
+    with c_thumb:
+        if camp.get("video_path"):
+            st.video(camp["video_path"])
+        else:
+            st.markdown(f"<div class='aff-thumb'>{icon}</div>", unsafe_allow_html=True)
+
+    # ── Nội dung ──
+    with c_main:
+        st.markdown(
+            f"<span class='aff-chip hk-{hook_type}'>{icon} {hook_type.capitalize()}</span>"
+            f"<span class='aff-chip st-{status}'>{status_label}</span>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<div style='font-size:13px;margin:4px 0'>{camp.get('hook_text','')}</div>",
+            unsafe_allow_html=True,
+        )
+        with st.expander("✏️ Sửa kịch bản / caption"):
+            hook = st.text_area("Hook", value=camp.get("hook_text", ""),
+                                height=70, key=f"hook_{cid}")
+            script = st.text_area("Kịch bản", value=camp.get("script", ""),
+                                  height=160, key=f"script_{cid}")
+            if st.button("💾 Lưu", key=f"save_script_{cid}"):
+                store.update_campaign(cid, hook_text=hook, script=script)
+                st.success("Đã lưu")
+
+            # Caption editor (khi đã sẵn sàng đăng)
+            if status in ("scheduled", "posted"):
+                current_caption = caption_svc.ensure_caption(cid)
+                new_caption = st.text_area("📝 Caption", value=current_caption,
+                                           height=120, key=f"caption_{cid}")
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    if st.button("💾 Lưu caption", key=f"save_cap_{cid}", use_container_width=True):
                         store.update_campaign(cid, caption=new_caption)
-                        try:
-                            post_id = fb_svc.post_campaign(cid)
-                            st.success(f"Đã đăng! Post ID: {post_id}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Lỗi đăng: {e}")
-
-                    # Schedule picker
-                    sched_col1, sched_col2 = st.columns(2)
-                    with sched_col1:
-                        sched_date = st.date_input("Ngày đăng", key=f"sched_date_{cid}")
-                    with sched_col2:
-                        sched_time = st.time_input("Giờ đăng", key=f"sched_time_{cid}")
-                    if st.button("💾 Lưu lịch", key=f"save_sched_{cid}"):
-                        scheduled_at = f"{sched_date} {sched_time}"
-                        store.update_campaign(cid, scheduled_at=scheduled_at)
-                        st.success(f"Lên lịch: {scheduled_at}")
-
-                elif status == "error":
-                    if st.button("🔄 Thử lại", key=f"retry_{cid}", use_container_width=True):
-                        store.update_campaign(cid, status="draft", task_id="", video_path="")
+                        st.success("Đã lưu caption")
+                with cc2:
+                    if st.button("🔄 Tạo lại caption", key=f"regen_cap_{cid}", use_container_width=True):
+                        pf = store.get_product(camp["product_id"])
+                        store.update_campaign(cid, caption=caption_svc.build_caption(camp, pf or {}))
                         st.rerun()
 
-            elif status == "posted":
-                st.success(f"✅ Đã đăng {camp.get('posted_at','')}")
-                st.metric("👁 Views", camp.get("views", 0))
-                if st.button("🔄 Cập nhật stats", key=f"sync_stats_{cid}"):
-                    _sync_stats(cid, camp, page)
+    # ── Hành động theo trạng thái ──
+    with c_act:
+        test_mode = store.get_setting("test_mode", "") == "1"
 
-            # Delete button
-            if st.button("🗑 Xoá", key=f"del_camp_{cid}", use_container_width=True):
-                store.delete_campaign(cid)
+        if status == "draft":
+            if st.button("🎬 Tạo video", key=f"render_{cid}", use_container_width=True, type="primary"):
+                task_id = video_client.start_video_task(cid)
+                if task_id:
+                    if not test_mode:
+                        t = threading.Thread(target=video_client.sync_campaign_video,
+                                             args=(cid,), daemon=True)
+                        t.start()
+                else:
+                    st.error("Không khởi động được render. Kiểm tra API server.")
                 st.rerun()
+
+        elif status == "rendering":
+            st.info("⏳ Đang render...")
+            if camp.get("task_id"):
+                result = video_client.poll_task(camp["task_id"])
+                st.progress(result.get("progress", 0) / 100)
+
+        elif status == "scheduled":
+            if page or test_mode:
+                post_label = "🧪 Đăng (thử)" if test_mode else "📤 Đăng Reels"
+                if st.button(post_label, key=f"post_{cid}", use_container_width=True, type="primary"):
+                    try:
+                        post_id = fb_svc.post_campaign(cid)
+                        st.success(f"Đã đăng! {post_id}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Lỗi: {e}")
+                with st.popover("📅 Lên lịch"):
+                    sd = st.date_input("Ngày", key=f"sched_date_{cid}")
+                    stime = st.time_input("Giờ", key=f"sched_time_{cid}")
+                    if st.button("Lưu lịch", key=f"save_sched_{cid}"):
+                        store.update_campaign(cid, scheduled_at=f"{sd} {stime}")
+                        st.success("Đã lên lịch")
+            else:
+                st.caption("Chưa chọn Page")
+
+        elif status == "error":
+            if st.button("🔄 Thử lại", key=f"retry_{cid}", use_container_width=True):
+                store.update_campaign(cid, status="draft", task_id="", video_path="")
+                st.rerun()
+
+        elif status == "posted":
+            st.markdown(
+                f"<div style='font-size:12px'>👁 {camp.get('views',0):,}<br>"
+                f"❤️ {camp.get('likes',0):,}</div>", unsafe_allow_html=True)
+            if st.button("🔄 Stats", key=f"sync_stats_{cid}", use_container_width=True):
+                _sync_stats(cid, camp, page)
+
+        if st.button("🗑", key=f"del_camp_{cid}", help="Xoá video"):
+            store.delete_campaign(cid)
+            st.rerun()
+
+    st.markdown("<hr style='margin:8px 0;border:none;border-top:1px solid #222636'>",
+                unsafe_allow_html=True)
 
 
 def _sync_stats(campaign_id: int, campaign: dict, page: dict | None):

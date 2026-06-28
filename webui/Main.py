@@ -291,6 +291,7 @@ if not config.app.get("hide_config", False):
                 aihubmix_label = "AIHubMix（推荐）"
             llm_provider_options = [
                 ("OpenAI", "openai"),
+                ("Claude (Anthropic)", "claude"),
                 (aihubmix_label, "aihubmix"),
                 ("AIML API", "aimlapi"),
                 ("EvoLink", "evolink"),
@@ -379,6 +380,19 @@ if not config.app.get("hide_config", False):
                             - **API Key**: [点击到官网申请](https://platform.openai.com/api-keys)
                             - **Base Url**: 官方 OpenAI 可留空；如果使用 OpenAI 兼容供应商（例如 OpenRouter），请填写对应的兼容接口地址
                             - **Model Name**: 填写**有权限**的模型；如果使用兼容供应商，请填写该平台支持的模型 ID
+                            """
+
+            if llm_provider == "claude":
+                if not llm_model_name:
+                    llm_model_name = "claude-sonnet-4-6"
+                if not llm_base_url:
+                    llm_base_url = "https://api.anthropic.com/v1/"
+                with llm_helper:
+                    tips = """
+                            ##### Claude (Anthropic) 配置说明
+                            - **API Key**: [点击到官网申请](https://console.anthropic.com/settings/keys)
+                            - **Base Url**: 留空即可（默认 https://api.anthropic.com/v1/，兼容 OpenAI 协议）
+                            - **Model Name**: 如 `claude-sonnet-4-6`, `claude-opus-4-8`, `claude-haiku-4-5-20251001`
                             """
 
             if llm_provider == "aihubmix":
