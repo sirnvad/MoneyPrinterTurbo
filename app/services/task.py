@@ -281,7 +281,33 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
         return downloaded_videos
 
 
-def _save_social_metadata(task_id: str, params, video_script: str) -> None:
+def _build_attribution_section(downloaded_videos: list) -> str:
+    """Build a markdown attribution section from sidecar JSON files of used videos."""
+    if not downloaded_videos:
+        return ""
+
+    seen = set()
+    entries = []
+    for video_path in downloaded_videos:
+        meta = material.read_video_sidecar(video_path)
+        if not meta:
+            continue
+        page_url = meta.get("page_url", "").strip()
+        provider = meta.get("provider", "").strip()
+        if not page_url or page_url in seen:
+            continue
+        seen.add(page_url)
+        label = provider.capitalize() if provider else "Stock footage"
+        entries.append(f"- [{label}]({page_url})")
+
+    if not entries:
+        return ""
+
+    lines = "\n".join(entries)
+    return f"## Attribution\n\n{lines}\n"
+
+
+def _save_social_metadata(task_id: str, params, video_script: str, downloaded_videos: list = None) -> None:
     logger.info("\n\n## generating social metadata file")
     platforms = list(llm.SOCIAL_PLATFORMS.keys())
     sections = []
@@ -305,10 +331,15 @@ def _save_social_metadata(task_id: str, params, video_script: str) -> None:
             logger.warning(f"failed to generate metadata for {label}: {e}")
             sections.append(f"## {label}\n\n_(generation failed)_\n")
 
+    attribution = _build_attribution_section(downloaded_videos or [])
+
     content = (
         f"# Social Metadata — {params.video_subject}\n\n"
         + "\n---\n\n".join(sections)
     )
+    if attribution:
+        content += "\n---\n\n" + attribution
+
     output_path = path.join(utils.task_dir(task_id), "social_metadata.md")
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -514,7 +545,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
                 logger.warning(f"⚠️ Failed to cross-post: {video_path} - {result.get('error', 'Unknown error')}")
 
     # 8. Generate social metadata file
-    _save_social_metadata(task_id, params, video_script)
+    _save_social_metadata(task_id, params, video_script, downloaded_videos)
 
     kwargs = {
         "videos": final_video_paths,

@@ -53,6 +53,7 @@ class MaterialInfo:
     provider: str = "pexels"
     url: str = ""
     duration: int = 0
+    page_url: str = ""  # Human-readable attribution URL (e.g. pexels.com/video/123)
 
 
 class VideoParams(BaseModel):
