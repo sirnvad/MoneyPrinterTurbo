@@ -100,6 +100,12 @@ openai_base_url = ""
 # 如果使用兼容供应商，请填写该平台要求的模型 ID。
 openai_model_name = "gpt-4o-mini"
 
+########## LM Studio (local OpenAI-compatible server)
+# Load model trong LM Studio rồi bật Developer → Start Server.
+# API key tùy ý (vd "lm-studio"). Base url mặc định http://localhost:1234/v1
+lmstudio_base_url = ""
+lmstudio_model_name = ""
+
 ########## Claude (Anthropic) API Key
 # Anthropic cung cấp endpoint tương thích OpenAI Chat Completions.
 # Lấy API key tại https://console.anthropic.com/settings/keys

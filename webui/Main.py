@@ -304,6 +304,7 @@ if not config.app.get("hide_config", False):
                 ("Grok", "grok"),
                 ("Groq", "groq"),
                 ("Ollama", "ollama"),
+                ("LM Studio", "lmstudio"),
                 ("G4f", "g4f"),
                 ("OneAPI", "oneapi"),
                 ("Cloudflare", "cloudflare"),
@@ -351,6 +352,18 @@ if not config.app.get("hide_config", False):
             llm_account_id = config.app.get(f"{llm_provider}_account_id", "")
 
             tips = ""
+            if llm_provider == "lmstudio":
+                if not llm_base_url:
+                    llm_base_url = "http://localhost:1234/v1"
+                with llm_helper:
+                    tips = """
+                            ##### LM Studio 配置说明
+                            - 在 LM Studio 中加载模型并启动本地服务器 (Developer → Start Server)
+                            - **API Key**: 随便填写，比如 `lm-studio`
+                            - **Base Url**: 一般为 `http://localhost:1234/v1`
+                            - **Model Name**: 填写 LM Studio 中已加载的模型 ID（在 server 日志或 `/v1/models` 查看）
+                            """
+
             if llm_provider == "ollama":
                 if not llm_model_name:
                     llm_model_name = "qwen:7b"
