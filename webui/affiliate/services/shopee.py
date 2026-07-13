@@ -78,10 +78,16 @@ def scrape_product(url: str) -> dict:
 # ── LLM helpers ────────────────────────────────────────────────────────────────
 
 def _call_llm(prompt: str) -> str:
-    """Gọi LLM qua cấu hình của MoneyPrinterTurbo (app.services.llm)."""
+    """
+    Gọi LLM qua cấu hình của MoneyPrinterTurbo (app.services.llm).
+
+    Với các model reasoning (Qwen3, ...), thêm '/no_think' để tắt suy nghĩ nội
+    bộ — trả JSON trực tiếp, nhanh hơn và tránh bị cắt cụt do hết token khi model
+    "suy nghĩ" quá dài.
+    """
     from app.services import llm as _llm  # import trễ tránh vòng lặp
 
-    return _llm._generate_response(prompt)
+    return _llm._generate_response("/no_think\n" + prompt)
 
 
 def _parse_json(raw: str):

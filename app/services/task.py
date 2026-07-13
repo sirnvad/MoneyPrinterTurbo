@@ -562,8 +562,11 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
             else:
                 logger.warning(f"⚠️ Failed to cross-post: {video_path} - {result.get('error', 'Unknown error')}")
 
-    # 8. Generate social metadata file
-    _save_social_metadata(task_id, params, video_script, downloaded_videos)
+    # 8. Generate social metadata file (bước phụ — không được làm hỏng task nếu lỗi)
+    try:
+        _save_social_metadata(task_id, params, video_script, downloaded_videos)
+    except Exception as e:
+        logger.warning(f"social metadata generation failed (video vẫn OK): {e}")
 
     kwargs = {
         "videos": final_video_paths,
