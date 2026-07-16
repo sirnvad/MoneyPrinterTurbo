@@ -1,6 +1,8 @@
+import json
 import os
 import random
 import threading
+from datetime import date
 from typing import List
 from urllib.parse import urlencode
 
@@ -100,6 +102,7 @@ def search_videos_pexels(
                     item.provider = "pexels"
                     item.url = video["link"]
                     item.duration = duration
+                    item.page_url = v.get("url", "")
                     video_items.append(item)
                     break
         return video_items
@@ -156,6 +159,7 @@ def search_videos_pixabay(
                     item.provider = "pixabay"
                     item.url = video["url"]
                     item.duration = duration
+                    item.page_url = v.get("pageURL", "")
                     video_items.append(item)
                     break
         return video_items
@@ -233,6 +237,8 @@ def search_videos_coverr(
             item.provider = "coverr"
             item.url = mp4_download_url
             item.duration = duration
+            slug = v.get("slug") or v.get("id") or ""
+            item.page_url = f"https://coverr.co/videos/{slug}" if slug else ""
             video_items.append(item)
         return video_items
     except Exception as e:
@@ -241,7 +247,36 @@ def search_videos_coverr(
     return []
 
 
-def save_video(video_url: str, save_dir: str = "") -> str:
+def _write_video_sidecar(video_path: str, provider: str, download_url: str, page_url: str) -> None:
+    sidecar_path = os.path.splitext(video_path)[0] + ".json"
+    if os.path.exists(sidecar_path):
+        return
+    data = {
+        "provider": provider,
+        "download_url": download_url,
+        "page_url": page_url,
+        "downloaded_at": str(date.today()),
+    }
+    try:
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"failed to write video sidecar: {sidecar_path} => {e}")
+
+
+def read_video_sidecar(video_path: str) -> dict:
+    """Return attribution metadata for a cached video, or empty dict if not found."""
+    sidecar_path = os.path.splitext(video_path)[0] + ".json"
+    if not os.path.exists(sidecar_path):
+        return {}
+    try:
+        with open(sidecar_path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_video(video_url: str, save_dir: str = "", provider: str = "", page_url: str = "") -> str:
     if not save_dir:
         save_dir = utils.storage_dir("cache_videos")
 
@@ -253,9 +288,11 @@ def save_video(video_url: str, save_dir: str = "") -> str:
     video_id = f"vid-{url_hash}"
     video_path = f"{save_dir}/{video_id}.mp4"
 
-    # if video already exists, return the path
+    # if video already exists, ensure sidecar exists then return
     if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
         logger.info(f"video already exists: {video_path}")
+        if provider:
+            _write_video_sidecar(video_path, provider, video_url, page_url)
         return video_path
 
     headers = {
@@ -281,6 +318,8 @@ def save_video(video_url: str, save_dir: str = "") -> str:
             duration = clip.duration
             fps = clip.fps
             if duration > 0 and fps > 0:
+                if provider:
+                    _write_video_sidecar(video_path, provider, video_url, page_url)
                 return video_path
         except Exception as e:
             logger.warning(f"invalid video file: {video_path} => {str(e)}")
@@ -365,7 +404,10 @@ def download_videos(
         try:
             logger.info(f"downloading video: {item.url}")
             saved_video_path = save_video(
-                video_url=item.url, save_dir=material_directory
+                video_url=item.url,
+                save_dir=material_directory,
+                provider=item.provider,
+                page_url=item.page_url,
             )
             if saved_video_path:
                 logger.info(f"video saved: {saved_video_path}")
@@ -446,7 +488,10 @@ def _download_videos_by_script_order(
                     f"downloading ordered video for '{search_term}': {item.url}"
                 )
                 saved_video_path = save_video(
-                    video_url=item.url, save_dir=material_directory
+                    video_url=item.url,
+                    save_dir=material_directory,
+                    provider=item.provider,
+                    page_url=item.page_url,
                 )
                 if saved_video_path:
                     logger.info(f"video saved: {saved_video_path}")

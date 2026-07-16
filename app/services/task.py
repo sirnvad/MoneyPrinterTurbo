@@ -1,4 +1,5 @@
 import math
+import os
 import os.path
 import re
 from os import path
@@ -8,7 +9,7 @@ from loguru import logger
 from app.config import config
 from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
-from app.services import llm, material, subtitle, video, voice, upload_post
+from app.services import llm, material, subtitle, twelvelabs, video, voice, upload_post
 from app.services import state as sm
 from app.utils import file_security, utils
 
@@ -39,15 +40,21 @@ def generate_terms(task_id, params, video_script):
     logger.info("\n\n## generating video terms")
     video_terms = params.video_terms
     if not video_terms:
-        # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
-        # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
-        # 无法改善“后面内容的画面提前出现”的问题。
-        video_terms = llm.generate_terms(
-            video_subject=params.video_subject,
-            video_script=video_script,
-            amount=8 if params.match_materials_to_script else 5,
-            match_script_order=params.match_materials_to_script,
-        )
+        if params.terms_per_sentence:
+            video_terms = llm.generate_terms_per_sentence(
+                video_subject=params.video_subject,
+                video_script=video_script,
+            )
+        else:
+            # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
+            # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
+            # 无法改善”后面内容的画面提前出现”的问题。
+            video_terms = llm.generate_terms(
+                video_subject=params.video_subject,
+                video_script=video_script,
+                amount=8 if params.match_materials_to_script else 5,
+                match_script_order=params.match_materials_to_script,
+            )
     else:
         if isinstance(video_terms, str):
             video_terms = [term.strip() for term in re.split(r"[,，]", video_terms)]
@@ -62,6 +69,14 @@ def generate_terms(task_id, params, video_script):
         sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
         logger.error("failed to generate video terms.")
         return None
+
+    # 可选的 TwelveLabs Marengo 语义重排：未启用时返回原顺序，无任何副作用。
+    # 顺序匹配模式下关键词顺序本身就是脚本叙事顺序，必须保持原样，故跳过。
+    if not params.match_materials_to_script:
+        video_terms = twelvelabs.rerank_terms_by_subject(
+            video_subject=params.video_subject,
+            search_terms=video_terms,
+        )
 
     return video_terms
 
@@ -186,12 +201,22 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
         - subtitle_path: path to the generated subtitle file
     '''
     logger.info("\n\n## generating subtitle")
-    if not params.subtitle_enabled or sub_maker is None:
+    if not params.subtitle_enabled:
         return ""
 
     subtitle_path = path.join(utils.task_dir(task_id), "subtitle.srt")
     subtitle_provider = config.app.get("subtitle_provider", "edge").strip().lower()
     logger.info(f"\n\n## generating subtitle, provider: {subtitle_provider}")
+
+    if sub_maker is None and subtitle_provider != "whisper":
+        # 自定义音频不会经过 TTS，因此没有 Edge/Azure 等 TTS 返回的
+        # sub_maker 时间轴。只有 Whisper 可以直接从音频文件转写字幕；
+        # 其他字幕提供方继续保持原有行为，避免生成错误的空时间轴。
+        logger.warning(
+            "subtitle maker is missing, skip subtitle generation for provider: "
+            f"{subtitle_provider}"
+        )
+        return ""
 
     subtitle_fallback = False
     if subtitle_provider == "edge":
@@ -228,6 +253,25 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return [material_info.url for material_info in materials]
+    elif params.video_source == "local_cache":
+        logger.info("\n\n## reusing videos from cache_videos directory")
+        cache_dir = utils.storage_dir("cache_videos")
+        if not os.path.exists(cache_dir):
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error(f"cache_videos directory not found: {cache_dir}")
+            return None
+        video_extensions = {".mp4", ".mov", ".avi", ".flv", ".mkv"}
+        cached_files = [
+            os.path.join(cache_dir, f)
+            for f in os.listdir(cache_dir)
+            if os.path.splitext(f)[1].lower() in video_extensions
+        ]
+        if not cached_files:
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error(f"no video files found in cache directory: {cache_dir}")
+            return None
+        logger.info(f"found {len(cached_files)} cached videos in {cache_dir}")
+        return cached_files
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
         # 顺序匹配模式只在用户显式开启时生效。这里强制素材下载按关键词顺序
@@ -253,6 +297,71 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return downloaded_videos
+
+
+def _build_attribution_section(downloaded_videos: list) -> str:
+    """Build a markdown attribution section from sidecar JSON files of used videos."""
+    if not downloaded_videos:
+        return ""
+
+    seen = set()
+    entries = []
+    for video_path in downloaded_videos:
+        meta = material.read_video_sidecar(video_path)
+        if not meta:
+            continue
+        page_url = meta.get("page_url", "").strip()
+        provider = meta.get("provider", "").strip()
+        if not page_url or page_url in seen:
+            continue
+        seen.add(page_url)
+        label = provider.capitalize() if provider else "Stock footage"
+        entries.append(f"- [{label}]({page_url})")
+
+    if not entries:
+        return ""
+
+    lines = "\n".join(entries)
+    return f"## Attribution\n\n{lines}\n"
+
+
+def _save_social_metadata(task_id: str, params, video_script: str, downloaded_videos: list = None) -> None:
+    logger.info("\n\n## generating social metadata file")
+    platforms = list(llm.SOCIAL_PLATFORMS.keys())
+    sections = []
+    for platform in platforms:
+        label = llm.SOCIAL_PLATFORM_LABELS.get(platform, platform)
+        try:
+            meta = llm.generate_social_metadata(
+                video_subject=params.video_subject,
+                video_script=video_script,
+                language=params.video_language or "",
+                platform=platform,
+            )
+            hashtags_str = " ".join(meta.get("hashtags", []))
+            sections.append(
+                f"## {label}\n\n"
+                f"**Title**\n{meta.get('title', '')}\n\n"
+                f"**Caption**\n{meta.get('caption', '')}\n\n"
+                f"**Hashtags**\n{hashtags_str}\n"
+            )
+        except Exception as e:
+            logger.warning(f"failed to generate metadata for {label}: {e}")
+            sections.append(f"## {label}\n\n_(generation failed)_\n")
+
+    attribution = _build_attribution_section(downloaded_videos or [])
+
+    content = (
+        f"# Social Metadata — {params.video_subject}\n\n"
+        + "\n---\n\n".join(sections)
+    )
+    if attribution:
+        content += "\n---\n\n" + attribution
+
+    output_path = path.join(utils.task_dir(task_id), "social_metadata.md")
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    logger.success(f"social metadata saved: {output_path}")
 
 
 def generate_final_videos(
@@ -426,7 +535,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
         logger.info(f"\n\n## cross-posting videos to {', '.join(platforms)}")
 
         youtube_extra = None
-        if "youtube" in platforms:
+        if any(p.startswith("youtube") for p in platforms):
             metadata = llm.generate_social_metadata(
                 video_subject=params.video_subject,
                 video_script=video_script,
@@ -452,6 +561,12 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
                 logger.info(f"✅ Cross-posted: {video_path}")
             else:
                 logger.warning(f"⚠️ Failed to cross-post: {video_path} - {result.get('error', 'Unknown error')}")
+
+    # 8. Generate social metadata file (bước phụ — không được làm hỏng task nếu lỗi)
+    try:
+        _save_social_metadata(task_id, params, video_script, downloaded_videos)
+    except Exception as e:
+        logger.warning(f"social metadata generation failed (video vẫn OK): {e}")
 
     kwargs = {
         "videos": final_video_paths,
