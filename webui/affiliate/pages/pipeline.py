@@ -15,6 +15,7 @@ import streamlit as st
 
 from webui.affiliate.store import db as store
 from webui.affiliate.services import shopee as shopee_svc
+from webui.affiliate.services import content as content_svc
 from webui.affiliate.services import video_client
 from webui.affiliate.services import facebook as fb_svc
 from webui.affiliate.services import caption as caption_svc
@@ -88,13 +89,78 @@ def render():
     _product_table()
 
 
-# ── Add product bar ───────────────────────────────────────────────────────────
+# ── Add bar (2 chế độ: Chủ đề / Link Shopee) ───────────────────────────────────
+
+def _page_options() -> dict:
+    pages = store.list_pages()
+    opts = {p["name"]: p["id"] for p in pages}
+    opts["— Chưa chọn page —"] = None
+    return opts
+
+
+def _analyze_dispatch(product_id: int):
+    """Chạy đúng engine theo source_type của product."""
+    product = store.get_product(product_id)
+    if product and product.get("source_type") == "topic":
+        content_svc.run_topic_analysis(product_id)
+    else:
+        shopee_svc.run_product_analysis(product_id)
+
 
 def _add_product_bar():
-    st.markdown("### 🛒 Thêm sản phẩm Shopee")
+    tab_topic, tab_shopee = st.tabs(["✨ Tạo từ chủ đề (nuôi kênh)", "🛒 Từ link Shopee"])
+    with tab_topic:
+        _add_by_topic()
+    with tab_shopee:
+        _add_by_shopee()
+
+
+def _add_by_topic():
+    st.caption("Sinh loạt video **giá trị** theo ngách — sản phẩm gợi ý ở comment, không bán hàng lộ liễu.")
+    with st.form("add_topic_form", clear_on_submit=True):
+        niches = content_svc.niche_labels()
+        col_niche, col_topic = st.columns([2, 3])
+        with col_niche:
+            niche_label = st.selectbox("Ngách", list(niches.values()))
+        with col_topic:
+            topic = st.text_input(
+                "Chủ đề", placeholder="vd: mẹo tiết kiệm điện, dọn tủ lạnh gọn gàng...",
+            )
+        col_page, col_count, col_btn = st.columns([2, 1, 1])
+        with col_page:
+            page_opts = _page_options()
+            page_name = st.selectbox("Page", list(page_opts.keys()), key="topic_page")
+        with col_count:
+            count = st.number_input("Số video", 5, 30, 10, key="topic_count")
+        with col_btn:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            submitted = st.form_submit_button("✨ Sinh loạt video", use_container_width=True, type="primary")
+
+    if submitted:
+        if not topic.strip():
+            st.error("Vui lòng nhập chủ đề.")
+            return
+        niche_key = next((k for k, v in niches.items() if v == niche_label), "")
+        page_id = _page_options().get(page_name)
+        product_id = store.add_product(
+            shopee_url="", page_id=page_id, script_count=int(count),
+            source_type="topic", niche=niche_key, name=topic.strip(),
+        )
+        with st.spinner("✨ AI đang sinh loạt video giá trị..."):
+            try:
+                content_svc.run_topic_analysis(product_id)
+            except Exception as e:
+                store.update_product(product_id, status="error")
+                st.error(f"Lỗi sinh nội dung: {e}")
+        st.session_state["expanded_product"] = product_id
+        st.success(f"Đã sinh {count} video cho chủ đề (ID: {product_id})")
+        st.rerun()
+
+
+def _add_by_shopee():
+    st.caption("Phân tích sản phẩm Shopee → kịch bản. (Hướng bán hàng trực tiếp.)")
     with st.form("add_product_form", clear_on_submit=True):
         col_url, col_page, col_count, col_btn = st.columns([4, 2, 1, 1])
-
         with col_url:
             url = st.text_input(
                 "Link Shopee",
@@ -102,18 +168,11 @@ def _add_product_bar():
                 label_visibility="collapsed",
             )
         with col_page:
-            pages = store.list_pages()
-            page_options = {p["name"]: p["id"] for p in pages}
-            page_options["— Chưa chọn page —"] = None
-            selected_page_name = st.selectbox(
-                "Page",
-                options=list(page_options.keys()),
-                label_visibility="collapsed",
-            )
+            page_opts = _page_options()
+            page_name = st.selectbox("Page", list(page_opts.keys()), label_visibility="collapsed")
         with col_count:
             script_count = st.number_input(
                 "Số video", min_value=5, max_value=10, value=5, label_visibility="collapsed",
-                help="Số video tạo ra cho sản phẩm (5–10)",
             )
         with col_btn:
             submitted = st.form_submit_button("➕ Phân tích & Tạo", use_container_width=True, type="primary")
@@ -122,9 +181,8 @@ def _add_product_bar():
         if not url.strip():
             st.error("Vui lòng nhập link Shopee.")
             return
-        page_id = page_options.get(selected_page_name)
+        page_id = _page_options().get(page_name)
         product_id = store.add_product(url.strip(), page_id, int(script_count))
-        # Chạy phân tích đồng bộ (Streamlit không tự refresh khi chạy thread nền)
         with st.spinner("🔍 AI đang phân tích sản phẩm và tạo kịch bản..."):
             try:
                 shopee_svc.run_product_analysis(product_id)
@@ -287,9 +345,9 @@ def _product_row(product: dict):
                     for c in store.list_campaigns(pid):
                         store.delete_campaign(c["id"])
                     store.update_product(pid, status="analyzing", insights="")
-                    with st.spinner("🔍 Đang phân tích lại..."):
+                    with st.spinner("🔄 Đang tạo lại..."):
                         try:
-                            shopee_svc.run_product_analysis(pid)
+                            _analyze_dispatch(pid)
                         except Exception as e:
                             store.update_product(pid, status="error")
                             st.error(f"Lỗi: {e}")
@@ -507,20 +565,32 @@ def _campaign_row(camp: dict, product: dict, page: dict | None):
                 store.update_campaign(cid, hook_text=hook, script=script)
                 st.success("Đã lưu")
 
-            # Caption editor (khi đã sẵn sàng đăng)
+            # Caption (giá trị, KHÔNG link) + Comment (chứa link) — monetize mềm
             if status in ("scheduled", "posted"):
                 current_caption = caption_svc.ensure_caption(cid)
-                new_caption = st.text_area("📝 Caption", value=current_caption,
-                                           height=120, key=f"caption_{cid}")
+                new_caption = st.text_area(
+                    "📝 Caption (nội dung giá trị — không chứa link)",
+                    value=current_caption, height=100, key=f"caption_{cid}",
+                )
+                current_comment = caption_svc.ensure_comment(cid)
+                new_comment = st.text_area(
+                    "💬 Comment đầu tiên (chứa link affiliate — tự động ghim)",
+                    value=current_comment, height=70, key=f"comment_{cid}",
+                    help="Link đặt ở comment để tránh nền tảng bóp reach.",
+                )
                 cc1, cc2 = st.columns(2)
                 with cc1:
-                    if st.button("💾 Lưu caption", key=f"save_cap_{cid}", use_container_width=True):
-                        store.update_campaign(cid, caption=new_caption)
-                        st.success("Đã lưu caption")
+                    if st.button("💾 Lưu", key=f"save_cap_{cid}", use_container_width=True):
+                        store.update_campaign(cid, caption=new_caption, comment_text=new_comment)
+                        st.success("Đã lưu")
                 with cc2:
-                    if st.button("🔄 Tạo lại caption", key=f"regen_cap_{cid}", use_container_width=True):
+                    if st.button("🔄 Tạo lại", key=f"regen_cap_{cid}", use_container_width=True):
                         pf = store.get_product(camp["product_id"])
-                        store.update_campaign(cid, caption=caption_svc.build_caption(camp, pf or {}))
+                        store.update_campaign(
+                            cid,
+                            caption=caption_svc.build_value_caption(camp),
+                            comment_text=caption_svc.build_comment(camp, pf or {}),
+                        )
                         st.rerun()
 
     # ── Hành động theo trạng thái ──

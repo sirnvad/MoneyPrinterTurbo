@@ -196,45 +196,64 @@ def _facebook_settings():
 # ── Shopee Affiliate ──────────────────────────────────────────────────────────
 
 def _shopee_settings():
-    st.markdown("#### Shopee Affiliate")
+    st.markdown("#### Shopee Affiliate — Monetize mềm")
+    st.caption("Caption mang giá trị (không link), link affiliate đặt ở **comment** để tránh bóp reach.")
     s = store.get_all_settings()
 
+    default_link = st.text_input(
+        "Link affiliate mặc định (cho video theo chủ đề)",
+        value=s.get("default_affiliate_link", ""),
+        help="Dùng khi video sinh từ chủ đề (không có link sản phẩm riêng). Đặt link Shopee Affiliate của bạn.",
+        placeholder="https://shopee.vn/... hoặc affiliate.shopee.vn/...",
+    )
     tracking_id = st.text_input(
         "Tracking ID mặc định",
         value=s.get("shopee_tracking_id", ""),
-        help="Thêm vào cuối link affiliate để theo dõi nguồn",
+        help="Gắn vào link để theo dõi nguồn click",
         placeholder="your_tracking_id",
     )
 
-    cta_text = st.text_input(
-        "CTA mặc định cuối video",
-        value=s.get("cta_text", "🔗 Link mua hàng trong bio!"),
-        help="Text hiển thị ở cuối video (subtitle CTA)",
-    )
+    col1, col2 = st.columns(2)
+    with col1:
+        caption_cta = st.text_input(
+            "CTA trong caption",
+            value=s.get("caption_cta", "💬 Link sản phẩm mình để ở bình luận ghim 👇"),
+        )
+    with col2:
+        comment_cta = st.text_input(
+            "CTA trong comment",
+            value=s.get("comment_cta", "🛒 Sản phẩm trong video nhé cả nhà:"),
+        )
 
     default_hashtags = st.text_area(
-        "Hashtag mặc định",
-        value=s.get("default_hashtags", "#shopee #review #muasắm #affiliate"),
-        height=80,
-        help="Tự động thêm vào caption khi đăng",
+        "Hashtag mặc định (caption)",
+        value=s.get("default_hashtags", "#meohay #tips #review #shopee"),
+        height=70,
     )
 
-    caption_template = st.text_area(
-        "Caption template",
-        value=s.get(
-            "caption_template",
-            "{script_hook}\n\n🛒 Mua ngay: {affiliate_link}\n\n{hashtags}",
-        ),
-        height=120,
-        help="Biến có thể dùng: {script_hook}, {affiliate_link}, {hashtags}",
-    )
+    with st.expander("Template nâng cao"):
+        caption_template = st.text_area(
+            "Caption template",
+            value=s.get("caption_template", "{script_hook}\n\n{cta}\n\n{hashtags}"),
+            height=90,
+            help="Biến: {script_hook}, {cta}, {hashtags}",
+        )
+        comment_template = st.text_area(
+            "Comment template",
+            value=s.get("comment_template", "{cta_comment}\n🔗 {affiliate_link}"),
+            height=70,
+            help="Biến: {cta_comment}, {affiliate_link}",
+        )
 
     if st.button("💾 Lưu cài đặt Shopee", key="save_shopee"):
         for key, val in {
+            "default_affiliate_link": default_link,
             "shopee_tracking_id": tracking_id,
-            "cta_text": cta_text,
+            "caption_cta": caption_cta,
+            "comment_cta": comment_cta,
             "default_hashtags": default_hashtags,
             "caption_template": caption_template,
+            "comment_template": comment_template,
         }.items():
             store.set_setting(key, val)
         st.success("Đã lưu")

@@ -145,9 +145,9 @@ def post_campaign(campaign_id: int, caption_template: str = "") -> str:
     if not campaign.get("video_path"):
         raise ValueError("Video chưa được render")
 
-    # Caption: ưu tiên caption đã lưu/sửa, không thì dựng mới
+    # Caption GIÁ TRỊ (không link) — monetize mềm
     from webui.affiliate.services import caption as caption_svc
-    caption = campaign.get("caption") or caption_svc.build_caption(campaign, product)
+    caption = campaign.get("caption") or caption_svc.build_value_caption(campaign)
 
     post_id = post_reel(page["page_id"], campaign["video_path"], caption)
     store.update_campaign(
@@ -156,7 +156,43 @@ def post_campaign(campaign_id: int, caption_template: str = "") -> str:
         post_id=post_id,
         posted_at=time.strftime("%Y-%m-%d %H:%M:%S"),
     )
+
+    # Tự động comment đầu tiên chứa link affiliate (ghim)
+    comment = campaign.get("comment_text") or caption_svc.build_comment(campaign, product)
+    if comment:
+        try:
+            post_comment(page["page_id"], post_id, comment, pin=True)
+        except Exception as e:
+            # Không làm hỏng việc đăng nếu comment lỗi
+            pass
+
     return post_id
+
+
+def post_comment(page_id: str, post_id: str, message: str, pin: bool = False) -> str:
+    """Đăng comment lên một post. Trả về comment_id. Tùy chọn ghim."""
+    token = _page_token(page_id)
+    if not token:
+        raise ValueError(f"Không tìm thấy token cho page_id={page_id}")
+    resp = requests.post(
+        f"{GRAPH_API}/{post_id}/comments",
+        params={"access_token": token},
+        json={"message": message},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    comment_id = resp.json().get("id", "")
+    if pin and comment_id:
+        try:
+            requests.post(
+                f"{GRAPH_API}/{comment_id}",
+                params={"access_token": token},
+                json={"is_pinned": True},
+                timeout=15,
+            )
+        except Exception:
+            pass
+    return comment_id
 
 
 # ── Page validation ────────────────────────────────────────────────────────────

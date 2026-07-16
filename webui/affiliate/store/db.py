@@ -27,14 +27,16 @@ CREATE TABLE IF NOT EXISTS fb_pages (
 
 CREATE TABLE IF NOT EXISTS products (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    shopee_url   TEXT NOT NULL,
-    name         TEXT DEFAULT '',
+    shopee_url   TEXT NOT NULL,       -- link Shopee (mode shopee) hoặc rỗng (mode topic)
+    name         TEXT DEFAULT '',     -- tên sản phẩm hoặc chủ đề
     price        TEXT DEFAULT '',
     image_url    TEXT DEFAULT '',
-    insights     TEXT DEFAULT '',   -- JSON: {target, pain_points, hooks}
+    insights     TEXT DEFAULT '',     -- JSON phân tích
     page_id      INTEGER REFERENCES fb_pages(id),
     script_count INTEGER DEFAULT 3,
     status       TEXT DEFAULT 'pending',
+    source_type  TEXT DEFAULT 'shopee', -- 'shopee' | 'topic'
+    niche        TEXT DEFAULT '',      -- key ngách (vd 'tiet_kiem')
     created_at   TEXT DEFAULT (datetime('now'))
 );
 
@@ -46,7 +48,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
     script       TEXT DEFAULT '',
     video_terms  TEXT DEFAULT '',   -- JSON list
     task_id      TEXT DEFAULT '',   -- MoneyPrinterTurbo task ID
-    caption      TEXT DEFAULT '',   -- Caption đăng bài (hook + link + hashtag)
+    caption      TEXT DEFAULT '',   -- Caption đăng bài (giá trị, KHÔNG chứa link)
+    comment_text TEXT DEFAULT '',   -- Comment đầu tiên chứa link affiliate
     video_path   TEXT DEFAULT '',
     status       TEXT DEFAULT 'draft',
     -- draft | scripting | rendering | scheduled | posted | error
@@ -86,9 +89,17 @@ def init_db():
 
 def _migrate(con):
     """Thêm cột mới cho DB cũ (idempotent)."""
-    existing = {r["name"] for r in con.execute("PRAGMA table_info(campaigns)").fetchall()}
-    if "caption" not in existing:
+    camp_cols = {r["name"] for r in con.execute("PRAGMA table_info(campaigns)").fetchall()}
+    if "caption" not in camp_cols:
         con.execute("ALTER TABLE campaigns ADD COLUMN caption TEXT DEFAULT ''")
+    if "comment_text" not in camp_cols:
+        con.execute("ALTER TABLE campaigns ADD COLUMN comment_text TEXT DEFAULT ''")
+
+    prod_cols = {r["name"] for r in con.execute("PRAGMA table_info(products)").fetchall()}
+    if "source_type" not in prod_cols:
+        con.execute("ALTER TABLE products ADD COLUMN source_type TEXT DEFAULT 'shopee'")
+    if "niche" not in prod_cols:
+        con.execute("ALTER TABLE products ADD COLUMN niche TEXT DEFAULT ''")
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -160,11 +171,19 @@ def get_product(product_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def add_product(shopee_url: str, page_id: int | None, script_count: int = 3) -> int:
+def add_product(
+    shopee_url: str,
+    page_id: int | None,
+    script_count: int = 3,
+    source_type: str = "shopee",
+    niche: str = "",
+    name: str = "",
+) -> int:
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO products(shopee_url, page_id, script_count, status) VALUES(?,?,?,'analyzing')",
-            (shopee_url, page_id, script_count),
+            "INSERT INTO products(shopee_url, page_id, script_count, status, source_type, niche, name) "
+            "VALUES(?,?,?,'analyzing',?,?,?)",
+            (shopee_url, page_id, script_count, source_type, niche, name),
         )
     return cur.lastrowid
 
