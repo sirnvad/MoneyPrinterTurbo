@@ -13,6 +13,7 @@ Triết lý (xem memory content-factory-vision):
 """
 
 import json
+import time
 
 from webui.affiliate.store import db as store
 from webui.affiliate.services import shopee as _shopee  # tái dùng _call_llm, _parse_json
@@ -116,90 +117,140 @@ def generate_content_series(
     topic: str,
     count: int = 5,
     product_hint: str = "",
+    on_progress=None,
 ) -> list[dict]:
     """
-    Sinh `count` video giá trị cho một chủ đề trong ngách.
+    Sinh `count` video giá trị cho một chủ đề trong ngách — theo 2 GIAI ĐOẠN:
+      A. Brainstorm `count` góc nhìn KHÁC NHAU (1 lần gọi, đảm bảo đa dạng).
+      B. Viết TỪNG kịch bản riêng lẻ (model dồn sức → sâu, ít sáo mòn).
+
+    on_progress(i, count): callback tùy chọn để cập nhật tiến độ.
 
     Returns list, mỗi phần tử:
-        {
-          "title":       "tiêu đề video",
-          "hook_type":   "tip|list|myth|mistake|howto|compare",
-          "hook_text":   "câu mở đầu 3s giữ chân",
-          "script":      "kịch bản 30-60s, GIÁ TRỊ, KHÔNG bán hàng",
-          "video_terms": ["từ khóa tìm footage tiếng Anh", ...],
-          "product_suggestion": "gợi ý loại sản phẩm để gắn ở comment (mềm)"
-        }
+        {title, hook_type, hook_text, script, video_terms, product_suggestion}
     """
+    niche = NICHES.get(niche_key, {})
+    default_hint = product_hint or niche.get("product_hint", "")
+    fallback_terms = niche.get("stock_terms", ["calm nature"])
+
+    # ── Giai đoạn A: brainstorm góc nhìn ──
+    angles = _brainstorm_angles(niche_key, topic, count)
+
+    # ── Giai đoạn B: viết từng kịch bản ──
+    videos: list[dict] = []
+    for i, angle in enumerate(angles, 1):
+        try:
+            v = _write_one_script(niche_key, topic, angle, default_hint)
+        except Exception:
+            # Bỏ qua kịch bản lỗi, tiếp tục các cái khác
+            continue
+        v["video_terms"] = _sanitize_terms(v.get("video_terms"), fallback_terms)
+        v["script"] = _strip_cta(v.get("script", ""))
+        if not v.get("title"):
+            v["title"] = angle.get("title", f"{topic} #{i}")
+        videos.append(v)
+        if on_progress:
+            on_progress(i, len(angles))
+
+    if not videos:
+        raise ValueError("Content engine không sinh được kịch bản nào")
+    return videos
+
+
+def _call_json(prompt: str, retries: int = 2):
+    """
+    Gọi LLM + parse JSON, retry khi rỗng/lỗi parse.
+    Xử lý cold-start của LM Studio (lần gọi đầu khi JIT-load model có thể trả rỗng).
+    """
+    last_err = None
+    for _ in range(retries + 1):
+        try:
+            raw = _shopee._call_llm(prompt)
+            if raw and raw.strip():
+                return _shopee._parse_json(raw)
+        except Exception as e:
+            last_err = e
+        time.sleep(2)  # chờ model ấm rồi thử lại
+    raise last_err or ValueError("LLM trả về rỗng")
+
+
+def _brainstorm_angles(niche_key: str, topic: str, count: int) -> list[dict]:
+    """Giai đoạn A: nghĩ ra `count` góc nhìn khác nhau (title + dạng + insight)."""
     niche = NICHES.get(niche_key, {})
     label = niche.get("label", niche_key)
     audience = niche.get("audience", "khán giả phổ thông")
     pillars = ", ".join(niche.get("pillars", []))
-    default_hint = product_hint or niche.get("product_hint", "")
     warning = niche.get("warning", "")
-    stock_examples = ", ".join(f'"{t}"' for t in niche.get("stock_terms", ["calm nature"]))
 
-    prompt = f"""Bạn là nhà sáng tạo nội dung ngắn (Reels/TikTok) chuyên ngách "{label}" tại Việt Nam.
-Đối tượng: {audience}.
+    prompt = f"""Bạn là nhà sáng tạo nội dung ngắn chuyên ngách "{label}" tại Việt Nam (đối tượng: {audience}).
+Hãy nghĩ ra {count} GÓC NHÌN KHÁC NHAU cho các video ngắn về chủ đề: "{topic}".
 
-Hãy tạo {count} ý tưởng video ngắn (30-60 giây) xoay quanh chủ đề: "{topic}".
-
-## NGUYÊN TẮC BẮT BUỘC
-
-1. GIÁ TRỊ THẬT: người xem phải học/nhận ra được điều gì đó cụ thể.
-
-2. KHÔNG QUẢNG CÁO — TUYỆT ĐỐI:
-   - Lời thoại KHÔNG được nhắc: link, bình luận, mua hàng, sản phẩm, "xem link", "inbox".
-   - Kết thúc bằng một câu chốt Ý NGHĨA (đọng lại suy ngẫm), KHÔNG kêu gọi hành động thương mại.
-
-3. TRÁNH SÁO MÒN — quan trọng nhất:
-   - CẤM dùng các ví dụ đã quá quen thuộc trên mạng (vd: "ly nước cầm lâu mỏi tay",
-     "oán giận như uống thuốc độc", "con ếch trong nồi nước sôi", "hai con sói trong tâm").
-   - Ưu tiên góc nhìn MỚI, tình huống ĐỜI THƯỜNG VIỆT NAM cụ thể (kẹt xe, deadline, họp gia đình,
-     tin nhắn chưa trả lời, ở trọ, chợ, quán cà phê...).
-   - Dùng chi tiết cụ thể, không nói chung chung sáo rỗng.
-
-4. ĐA DẠNG: mỗi video một góc + một dạng khác nhau ({pillars}).
-   Khác nhau cả nhịp điệu và độ dài, đừng viết {count} bài cùng một khuôn.
-
-5. Văn nói tự nhiên, như đang tâm sự với một người bạn.
-{f'6. LƯU Ý ĐẶC THÙ: {warning}' if warning else ''}
-
-## video_terms — RẤT QUAN TRỌNG
-Dùng để tải footage từ Pexels/Pixabay (chỉ hiểu TIẾNG ANH).
-- BẮT BUỘC viết bằng TIẾNG ANH, 4-6 từ khóa.
-- Mô tả CẢNH QUAY CỤ THỂ NHÌN THẤY ĐƯỢC, không phải khái niệm trừu tượng.
-- ĐÚNG: {stock_examples}
-- SAI: "vô thường", "chấp nhận", "impermanence", "acceptance" (trừu tượng, không quay được).
-
-## product_suggestion
-Gợi ý loại sản phẩm để đặt link ở comment (KHÔNG xuất hiện trong lời thoại),
-tham khảo nhóm: {default_hint}.
+Yêu cầu:
+- Mỗi góc khai thác một khía cạnh/insight RIÊNG BIỆT, không trùng lặp.
+- Gắn với tình huống ĐỜI THƯỜNG VIỆT NAM cụ thể (công việc, gia đình, mạng xã hội, đi lại, tiền bạc...).
+- TRÁNH mọi ví dụ sáo mòn phổ biến (ly nước, thuốc độc, ếch trong nồi, hai con sói...).
+- Đa dạng dạng nội dung: {pillars}.
+{f'- LƯU Ý: {warning}' if warning else ''}
 
 Trả về JSON thuần (không markdown), đúng {count} phần tử:
 {{
-  "videos": [
-    {{
-      "title": "...",
-      "hook_type": "một trong: {pillars}",
-      "hook_text": "câu mở đầu 3 giây giữ chân",
-      "script": "kịch bản đầy đủ, KHÔNG nhắc link/sản phẩm",
-      "video_terms": ["english scene 1", "english scene 2", "english scene 3", "english scene 4"],
-      "product_suggestion": "..."
-    }}
+  "angles": [
+    {{"title": "tiêu đề ngắn", "hook_type": "một dạng trong: {pillars}", "angle": "1 câu mô tả insight/góc khai thác cụ thể"}}
   ]
 }}"""
+    data = _call_json(prompt)
+    angles = data.get("angles", data) if isinstance(data, dict) else data
+    if not isinstance(angles, list) or not angles:
+        raise ValueError("Không brainstorm được góc nhìn")
+    return angles[:count]
 
-    raw = _shopee._call_llm(prompt)
-    data = _shopee._parse_json(raw)
-    videos = data.get("videos", data) if isinstance(data, dict) else data
-    if not isinstance(videos, list):
-        raise ValueError("Content engine không trả về danh sách video hợp lệ")
 
-    fallback_terms = niche.get("stock_terms", ["calm nature"])
-    for v in videos:
-        v["video_terms"] = _sanitize_terms(v.get("video_terms"), fallback_terms)
-        v["script"] = _strip_cta(v.get("script", ""))
-    return videos
+def _write_one_script(niche_key: str, topic: str, angle: dict, product_hint: str) -> dict:
+    """Giai đoạn B: viết 1 kịch bản đầy đủ cho một góc nhìn."""
+    niche = NICHES.get(niche_key, {})
+    label = niche.get("label", niche_key)
+    warning = niche.get("warning", "")
+    stock_examples = ", ".join(f'"{t}"' for t in niche.get("stock_terms", ["calm nature"]))
+
+    title = angle.get("title", topic)
+    hook_type = angle.get("hook_type", "tip")
+    angle_desc = angle.get("angle", "")
+
+    prompt = f"""Bạn là copywriter video ngắn (Reels/TikTok) ngách "{label}" tại Việt Nam.
+Viết MỘT kịch bản video 30-60 giây thật hay cho góc nhìn sau:
+
+Chủ đề: "{topic}"
+Tiêu đề: "{title}"
+Góc khai thác: {angle_desc}
+Dạng: {hook_type}
+
+## YÊU CẦU CHẤT LƯỢNG
+1. HOOK 3 giây đầu phải giữ chân ngay (câu hỏi/tình huống bất ngờ, KHÔNG mở bài sáo rỗng).
+2. Thân bài: đi vào một tình huống ĐỜI THƯỜNG VIỆT NAM cụ thể, chi tiết, có hình ảnh.
+3. Mang GIÁ TRỊ thật — người xem nhận ra/học được điều gì đó.
+4. Kết bằng MỘT câu đọng lại suy ngẫm. TUYỆT ĐỐI không nhắc link/bình luận/mua hàng/sản phẩm.
+5. CẤM ví dụ sáo mòn (ly nước, thuốc độc, ếch trong nồi, hai con sói, viên đá trong ba lô...).
+6. Văn nói tự nhiên như tâm sự với một người bạn. Độ dài ~90-130 từ.
+{f'7. LƯU Ý ĐẶC THÙ: {warning}' if warning else ''}
+
+## video_terms
+4-6 từ khóa TIẾNG ANH mô tả CẢNH QUAY CỤ THỂ để tải footage từ Pexels (chỉ hiểu tiếng Anh).
+- ĐÚNG: {stock_examples}
+- SAI: từ trừu tượng như "impermanence", "acceptance", hay tiếng Việt.
+
+Trả về JSON thuần (không markdown):
+{{
+  "title": "{title}",
+  "hook_type": "{hook_type}",
+  "hook_text": "câu mở đầu 3 giây",
+  "script": "kịch bản đầy đủ, KHÔNG nhắc link/sản phẩm",
+  "video_terms": ["english scene 1", "english scene 2", "english scene 3", "english scene 4"],
+  "product_suggestion": "loại sản phẩm gợi ý (tham khảo: {product_hint})"
+}}"""
+    data = _call_json(prompt)
+    if not isinstance(data, dict):
+        raise ValueError("Kịch bản trả về không hợp lệ")
+    return data
 
 
 # ── Lưới an toàn ───────────────────────────────────────────────────────────────
