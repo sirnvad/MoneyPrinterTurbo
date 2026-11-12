@@ -110,6 +110,40 @@ def niche_labels() -> dict[str, str]:
     return {k: v["label"] for k, v in NICHES.items()}
 
 
+# ── Độ dài lời thoại ↔ thời lượng video ─────────────────────────────────────────
+#
+# Đo thực tế với Edge TTS giọng vi-VN-NamMinhNeural: 3.43 từ/giây ở tốc độ 1.0,
+# 3.08 từ/giây ở 0.9 (≈ tỉ lệ thuận với tốc độ). "Từ" = âm tiết cách nhau bởi dấu cách.
+# Video MoneyPrinterTurbo dài đúng bằng phần lời đọc, nên số từ quyết định thời lượng.
+
+WORDS_PER_SECOND_AT_1X = 3.4
+MIN_SECONDS = 30
+MAX_SECONDS = 60
+TARGET_SECONDS = (45, 55)  # 50-60s có tỉ lệ xem hết cao nhất; chừa biên an toàn
+
+
+def _voice_rate() -> float:
+    try:
+        rate = float(store.get_setting("voice_rate", "1.0") or 1.0)
+    except ValueError:
+        rate = 1.0
+    return min(max(rate, 0.5), 2.0)
+
+
+def count_words(script: str) -> int:
+    return len((script or "").split())
+
+
+def estimate_seconds(script: str, rate: float | None = None) -> float:
+    """Thời lượng đọc ước tính (giây) của một kịch bản ở tốc độ đọc đã cấu hình."""
+    rate = rate or _voice_rate()
+    return count_words(script) / (WORDS_PER_SECOND_AT_1X * rate)
+
+
+def _words_for(seconds: float, rate: float) -> int:
+    return round(seconds * WORDS_PER_SECOND_AT_1X * rate)
+
+
 # ── Sinh loạt video tip-based ──────────────────────────────────────────────────
 
 def generate_content_series(
@@ -146,6 +180,10 @@ def generate_content_series(
             continue
         v["video_terms"] = _sanitize_terms(v.get("video_terms"), fallback_terms)
         v["script"] = _strip_cta(v.get("script", ""))
+        try:
+            v["script"] = _fit_length(niche_key, v["script"])
+        except Exception:
+            pass  # giữ bản gốc; UI sẽ cảnh báo nếu độ dài lệch
         if not v.get("title"):
             v["title"] = angle.get("title", f"{topic} #{i}")
         videos.append(v)
@@ -216,8 +254,15 @@ def _write_one_script(niche_key: str, topic: str, angle: dict, product_hint: str
     hook_type = angle.get("hook_type", "tip")
     angle_desc = angle.get("angle", "")
 
+    rate = _voice_rate()
+    lo, hi = (_words_for(s, rate) for s in TARGET_SECONDS)
+    # Ngân sách theo phần (tỉ lệ trên tổng ~165 từ ở tốc độ 1.0)
+    budget = {k: (round(a * lo / 150), round(b * hi / 180)) for k, (a, b) in {
+        "hook": (12, 18), "situation": (35, 45), "insight": (60, 80),
+        "apply": (25, 35), "close": (10, 15)}.items()}
+
     prompt = f"""Bạn là copywriter video ngắn (Reels/TikTok) ngách "{label}" tại Việt Nam.
-Viết MỘT kịch bản video 30-60 giây thật hay cho góc nhìn sau:
+Viết MỘT kịch bản video {TARGET_SECONDS[0]}-{TARGET_SECONDS[1]} giây thật hay cho góc nhìn sau:
 
 Chủ đề: "{topic}"
 Tiêu đề: "{title}"
@@ -230,8 +275,18 @@ Dạng: {hook_type}
 3. Mang GIÁ TRỊ thật — người xem nhận ra/học được điều gì đó.
 4. Kết bằng MỘT câu đọng lại suy ngẫm. TUYỆT ĐỐI không nhắc link/bình luận/mua hàng/sản phẩm.
 5. CẤM ví dụ sáo mòn (ly nước, thuốc độc, ếch trong nồi, hai con sói, viên đá trong ba lô...).
-6. Văn nói tự nhiên như tâm sự với một người bạn. Độ dài ~90-130 từ.
+6. Văn nói tự nhiên như tâm sự với một người bạn.
 {f'7. LƯU Ý ĐẶC THÙ: {warning}' if warning else ''}
+
+## ĐỘ DÀI — BẮT BUỘC {lo}-{hi} TỪ (đọc thành tiếng khoảng {TARGET_SECONDS[0]}-{TARGET_SECONDS[1]} giây)
+Viết đủ 5 phần theo thứ tự, mỗi phần đúng số từ:
+- Hook: {budget['hook'][0]}-{budget['hook'][1]} từ
+- Tình huống cụ thể: {budget['situation'][0]}-{budget['situation'][1]} từ
+- Giải thích / insight: {budget['insight'][0]}-{budget['insight'][1]} từ (phần dài nhất, có ví dụ)
+- Gợi ý áp dụng: {budget['apply'][0]}-{budget['apply'][1]} từ
+- Câu chốt: {budget['close'][0]}-{budget['close'][1]} từ
+Ghép 5 phần thành một đoạn văn liền mạch trong "script" (không ghi tên phần).
+Kịch bản dưới {lo} từ sẽ bị loại.
 
 ## video_terms
 4-6 từ khóa TIẾNG ANH mô tả CẢNH QUAY CỤ THỂ để tải footage từ Pexels (chỉ hiểu tiếng Anh).
@@ -251,6 +306,48 @@ Trả về JSON thuần (không markdown):
     if not isinstance(data, dict):
         raise ValueError("Kịch bản trả về không hợp lệ")
     return data
+
+
+def _fit_length(niche_key: str, script: str, attempts: int = 2) -> str:
+    """
+    Đưa kịch bản về khoảng MIN_SECONDS–MAX_SECONDS. LLM đếm từ kém nên đo bằng code,
+    rồi nhờ LLM viết thêm (thiếu) hoặc rút gọn (thừa), tối đa `attempts` lần.
+    Trả về bản tốt nhất tìm được (gần khoảng cho phép nhất).
+    """
+    rate = _voice_rate()
+    lo, hi = (_words_for(s, rate) for s in TARGET_SECONDS)
+    min_w, max_w = _words_for(MIN_SECONDS, rate), _words_for(MAX_SECONDS, rate)
+    warning = NICHES.get(niche_key, {}).get("warning", "")
+
+    def distance(text: str) -> int:
+        n = count_words(text)
+        return max(min_w - n, n - max_w, 0)
+
+    best = script
+    for _ in range(attempts):
+        n = count_words(best)
+        if min_w <= n <= max_w:
+            return best
+        if n < min_w:
+            task = (f"Kịch bản đang có {n} từ, quá ngắn. Viết lại thành {lo}-{hi} từ: "
+                    "GIỮ NGUYÊN câu mở đầu và câu chốt, mở rộng phần giữa bằng một ví dụ "
+                    "đời thường Việt Nam cụ thể và một gợi ý áp dụng thực tế. Không lặp ý.")
+        else:
+            task = (f"Kịch bản đang có {n} từ, quá dài. Rút gọn còn {lo}-{hi} từ: "
+                    "GIỮ NGUYÊN câu mở đầu và câu chốt, bỏ ý lặp và câu rườm rà ở phần giữa.")
+        prompt = f"""{task}
+Không nhắc link, bình luận, mua hàng hay sản phẩm. Văn nói tự nhiên.
+{f'LƯU Ý: {warning}' if warning else ''}
+
+KỊCH BẢN HIỆN TẠI:
+{best}
+
+Trả về JSON thuần (không markdown): {{"script": "kịch bản mới"}}"""
+        data = _call_json(prompt)
+        candidate = _strip_cta(data.get("script", "") if isinstance(data, dict) else "")
+        if candidate and distance(candidate) < distance(best):
+            best = candidate
+    return best
 
 
 # ── Lưới an toàn ───────────────────────────────────────────────────────────────

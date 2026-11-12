@@ -593,9 +593,18 @@ def _campaign_row(camp: dict, product: dict, page: dict | None):
                 st.markdown("<div class='af-thumb'>Chưa render</div>", unsafe_allow_html=True)
 
         with c_main:
+            secs = content_svc.estimate_seconds(camp.get("script", ""))
+            words = content_svc.count_words(camp.get("script", ""))
+            in_range = content_svc.MIN_SECONDS <= secs <= content_svc.MAX_SECONDS
+            length_chip = theme.chip(
+                f"≈ {secs:.0f}s · {words} từ" if in_range
+                else f"≈ {secs:.0f}s · {'quá ngắn' if secs < content_svc.MIN_SECONDS else 'quá dài'}",
+                "" if in_range else "is-error",
+            )
             st.markdown(
                 theme.chip(hook_type)
                 + theme.chip(status_label, _STATUS_CHIP_VARIANT.get(status, ""))
+                + length_chip
                 + f"<p class='af-hook'>{theme.esc(hook_text)}</p>",
                 unsafe_allow_html=True,
             )
@@ -604,6 +613,10 @@ def _campaign_row(camp: dict, product: dict, page: dict | None):
                                     height=70, key=f"hook_{cid}")
                 script = st.text_area("Kịch bản", value=camp.get("script", ""),
                                       height=160, key=f"script_{cid}")
+                theme.field_help(
+                    f"{content_svc.count_words(script)} từ ≈ {content_svc.estimate_seconds(script):.0f} "
+                    f"giây đọc. Nên giữ trong khoảng {content_svc.MIN_SECONDS}–"
+                    f"{content_svc.MAX_SECONDS} giây.")
                 if st.button("Lưu kịch bản", key=f"save_script_{cid}"):
                     store.update_campaign(cid, hook_text=hook, script=script)
                     st.success("Đã lưu kịch bản.")
