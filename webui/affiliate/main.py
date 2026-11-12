@@ -3,9 +3,9 @@ AffiliateStudio — Shopee Affiliate Video Pipeline
 Entry point: streamlit run webui/affiliate/main.py
 
 Tabs:
-  📊 Dashboard  — lịch tháng + thống kê
-  ⚡ Pipeline   — quản lý sản phẩm & kịch bản
-  ⚙️ Cài đặt   — API keys, LLM, video, Facebook Pages
+  Dashboard  — KPI + lịch nội dung
+  Pipeline   — tạo loạt video theo chủ đề / link Shopee
+  Cài đặt    — LLM, video, Facebook Pages, affiliate
 """
 
 import sys
@@ -18,11 +18,11 @@ if str(_ROOT) not in sys.path:
 
 import streamlit as st
 
+from webui.affiliate import theme
 from webui.affiliate.store import db as store
-from webui.affiliate.pages import dashboard, pipeline, settings
+from webui.affiliate.views import dashboard, pipeline, settings
 
-
-# ── Page config ───────────────────────────────────────────────────────────────
+theme.apply_streamlit_theme()
 
 st.set_page_config(
     page_title="AffiliateStudio",
@@ -31,89 +31,21 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Global CSS ────────────────────────────────────────────────────────────────
-
-st.markdown(
-    """
-    <style>
-    /* Hide default Streamlit header/footer */
-    #MainMenu, footer, header {visibility: hidden;}
-
-    /* Tighter padding */
-    .block-container {padding-top: 1rem; padding-bottom: 0.5rem;}
-
-    /* Metric cards */
-    [data-testid="metric-container"] {
-        background: #1a1d27;
-        border: 1px solid #2d3142;
-        border-radius: 8px;
-        padding: 12px 16px;
-    }
-
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 4px;
-        background: #13151f;
-        padding: 6px 8px;
-        border-radius: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 6px;
-        padding: 6px 16px;
-        font-size: 14px;
-    }
-    .stTabs [aria-selected="true"] {
-        background: #ff4b4b !important;
-        color: white !important;
-    }
-
-    /* Expander header */
-    .streamlit-expanderHeader {
-        font-size: 14px;
-        background: #1a1d27;
-        border-radius: 6px;
-    }
-
-    /* Buttons */
-    .stButton > button[kind="primary"] {
-        background: #ff4b4b;
-        border: none;
-    }
-    .stButton > button[kind="primary"]:hover {
-        background: #e53935;
-    }
-
-    /* Calendar day buttons — compact */
-    div[data-testid="column"] .stButton > button {
-        padding: 4px 2px;
-        font-size: 11px;
-        min-height: 32px;
-    }
-
-    /* Info/success/error boxes */
-    .stAlert {border-radius: 6px;}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ── Init DB ───────────────────────────────────────────────────────────────────
-
+theme.inject_css()
 store.init_db()
 
-# ── Header ────────────────────────────────────────────────────────────────────
-
+_test_badge = (
+    "<span class='af-badge'>Chế độ thử nghiệm</span>"
+    if store.get_setting("test_mode", "") == "1"
+    else ""
+)
 st.markdown(
-    "<h2 style='margin-bottom:0'>🎬 AffiliateStudio</h2>"
-    "<p style='color:#888;margin-top:2px'>Shopee Affiliate Video Pipeline</p>",
+    "<div class='af-header'><h1>AffiliateStudio</h1>"
+    f"<span>Shopee Affiliate Video Pipeline</span>{_test_badge}</div>",
     unsafe_allow_html=True,
 )
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-
-tab_dash, tab_pipe, tab_settings = st.tabs(
-    ["📊 Dashboard", "⚡ Pipeline", "⚙️ Cài đặt"]
-)
+tab_dash, tab_pipe, tab_settings = st.tabs(["Dashboard", "Pipeline", "Cài đặt"])
 
 with tab_dash:
     dashboard.render()

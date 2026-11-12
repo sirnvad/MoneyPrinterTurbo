@@ -731,6 +731,7 @@ class TestLiteLLMProvider(unittest.TestCase):
                 "cloudgpu",
                 "cheapaimodel",
                 "ollama",
+                "lmstudio",
                 "claude_code",
                 "oneapi",
                 "litellm",
