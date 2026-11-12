@@ -2711,6 +2711,20 @@ def elevenlabs_tts(
     return None
 
 
+def _transcode_to_mp3(audio_bytes: bytes, mp3_path: str) -> None:
+    """Transcode a wav byte stream (streamed with an unknown length) to mp3."""
+    import subprocess
+
+    result = subprocess.run(
+        [utils.get_ffmpeg_binary(), "-y", "-loglevel", "error",
+         "-i", "pipe:0", "-codec:a", "libmp3lame", "-q:a", "2", "-f", "mp3", mp3_path],
+        input=audio_bytes, capture_output=True, timeout=120,
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            f"could not transcode TTS audio to mp3: {result.stderr.decode(errors='ignore')[:200]}")
+
+
 def _openai_compatible_tts(
     provider: str,
     base_url: str,
@@ -2744,6 +2758,10 @@ def _openai_compatible_tts(
     # OpenAI speech 协议没有音量字段；最终混音阶段应用 voice_volume。
     # speed 仅调节语速，不能作为音量参数使用。
 
+    # Some self-hosted servers (e.g. VieNeu-TTS) only stream pcm/wav and answer
+    # 400 for mp3. Fall back to wav once and transcode it to mp3 locally.
+    wav_fallback_used = False
+
     for i in range(3):
         temporary_audio = None
         response_accepted = False
@@ -2758,6 +2776,19 @@ def _openai_compatible_tts(
                 # forward its input/credentials. Do not follow or resubmit it.
                 logger.error("TTS endpoint returned a redirect; stop speech retries")
                 return None
+            if (
+                response.status_code == 400
+                and not wav_fallback_used
+                and "response_format" in response.text
+            ):
+                # A 400 is a validation reject, no synthesis happened, so a
+                # second request cannot duplicate work.
+                logger.info(f"{provider} rejected mp3, retrying with wav")
+                payload["response_format"] = "wav"
+                wav_fallback_used = True
+                response = trace_http_call(
+                    "POST", requests.post, url, json=payload, headers=headers,
+                    allow_redirects=False, timeout=120)
             if response.status_code != 200:
                 logger.error(
                     f"{provider} tts failed with status {response.status_code}: {response.text[:200]}"
@@ -2775,7 +2806,10 @@ def _openai_compatible_tts(
                 suffix=".mp3", delete=False,
             ) as f:
                 temporary_audio = f.name
-                f.write(response.content)
+                if payload["response_format"] == "mp3":
+                    f.write(response.content)
+            if payload["response_format"] != "mp3":
+                _transcode_to_mp3(response.content, temporary_audio)
 
             _validate_remote_tts_audio(temporary_audio)
             audio_clip = AudioFileClip(temporary_audio)
