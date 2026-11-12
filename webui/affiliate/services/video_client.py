@@ -81,7 +81,7 @@ def start_video_task(campaign_id: int) -> str | None:
 
     try:
         resp = requests.post(
-            f"{_base_url()}/api/v1/video/create",
+            f"{_base_url()}/api/v1/videos",
             json=params,
             timeout=30,
         )
