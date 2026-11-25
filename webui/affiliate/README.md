@@ -55,7 +55,7 @@ webui/affiliate/
 │   ├── video_client.py     # Gọi API MoneyPrinterTurbo tạo video
 │   ├── facebook.py         # Đăng Reels qua Facebook Graph API
 │   └── caption.py          # Dựng caption + gắn tracking link
-└── pages/
+└── views/                  # (danh sách tính năng đầy đủ: FEATURES.md ở gốc repo)
     ├── dashboard.py        # Lịch + thống kê
     ├── pipeline.py         # Quản lý sản phẩm & video
     └── settings.py         # Cấu hình
